@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+"""
+Build education_v1 benchmark dataset.
+
+This script downloads and prepares educational speech data from:
+- SUMM-RE (40%): meetings and discussion-based content
+- VoxPopuli FR (20%): long-form institutional speech
+- PASTEL/COCo/Canal-U (40%): course lectures (with placeholder support)
+
+Target: 30-60 minutes of audio total
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import time
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from datasets import load_dataset, Audio
+from src.preprocessing.normalize import normalize_text
+import soundfile as sf
+import librosa
+import numpy as np
+from tqdm import tqdm
+
+try:
+    import jsonlines
+except ImportError:
+    print("⚠️  jsonlines not installed. Install with: pip install jsonlines")
+    jsonlines = None
+
+
+# Configuration
+BENCHMARK_DIR = Path(__file__).parent.parent / "benchmark" / "education"
+AUDIO_DIR = BENCHMARK_DIR / "audio"
+REFS_DIR = BENCHMARK_DIR / "refs"
+METADATA_FILE = BENCHMARK_DIR / "metadata.jsonl"
+
+# Target ratios: SUMM-RE (40%), PASTEL (40%), VoxPopuli (20%)
+TARGET_RATIOS = {
+    "summre": 0.40,
+    "pastel": 0.40,
+    "voxpopuli": 0.20,
+}
+
+# Target counts (approximate, will be adjusted based on available data)
+TARGET_COUNTS = {
+    "summre": 15,
+    "pastel": 15,
+    "voxpopuli": 8,
+}
+
+# Audio settings
+SAMPLING_RATE = 16000
+MIN_DURATION = 10.0  # seconds
+MAX_DURATION = 600.0  # seconds (10 minutes max per file)
+
+
+def ensure_directories():
+    """Create necessary directories if they don't exist."""
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"✅ Directories created: {BENCHMARK_DIR}")
+
+
+def get_audio_duration(audio_path: Path) -> float:
+    """Get duration of audio file in seconds."""
+    try:
+        y, sr = librosa.load(str(audio_path), sr=None)
+        duration = len(y) / sr
+        return duration
+    except Exception as e:
+        print(f"⚠️  Error getting duration for {audio_path}: {e}")
+        return 0.0
+
+
+def save_audio_file(audio_data, output_path: Path, sampling_rate: int = SAMPLING_RATE):
+    """
+    Save audio data to WAV file.
+    
+    Args:
+        audio_data: Audio array or Audio object from datasets
+        output_path: Path to save the audio file
+        sampling_rate: Target sampling rate (default: 16000)
+    """
+    # Handle Audio object from datasets
+    if hasattr(audio_data, "array"):
+        audio_array = audio_data["array"]
+        sr = audio_data["sampling_rate"]
+    elif isinstance(audio_data, dict):
+        audio_array = audio_data.get("array", audio_data.get("audio"))
+        sr = audio_data.get("sampling_rate", sampling_rate)
+    else:
+        audio_array = audio_data
+        sr = sampling_rate
+    
+    # Convert to numpy array if needed
+    if not isinstance(audio_array, np.ndarray):
+        audio_array = np.array(audio_array)
+    
+    # Resample if needed
+    if sr != sampling_rate:
+        audio_array = librosa.resample(audio_array, orig_sr=sr, target_sr=sampling_rate)
+    
+    # Ensure mono
+    if len(audio_array.shape) > 1:
+        audio_array = np.mean(audio_array, axis=0)
+    
+    # Save as WAV
+    sf.write(str(output_path), audio_array, sampling_rate)
+
+
+def load_summre_dataset(limit: Optional[int] = None) -> List[Dict]:
+    """
+    Load SUMM-RE dataset from HuggingFace.
+    
+    Args:
+        limit: Maximum number of samples to load (None for all)
+    
+    Returns:
+        List of samples with audio and transcription
+    """
+    print("\n" + "=" * 60)
+    print("📥 Loading SUMM-RE dataset...")
+    print("=" * 60)
+    
+    try:
+        dataset = load_dataset("linagora/SUMM-RE", split="train")
+        
+        if limit:
+            dataset = dataset.select(range(min(limit, len(dataset))))
+        
+        print(f"   ✓ Loaded {len(dataset)} samples")
+        print(f"   📋 Columns: {dataset.column_names}")
+        
+        samples = []
+        for i, sample in enumerate(dataset):
+            # SUMM-RE structure may vary, adapt based on actual columns
+            # Common columns: "audio", "transcription", "text", "sentence"
+            audio_col = None
+            text_col = None
+            
+            # Try to find audio column
+            for col in ["audio", "speech", "sound"]:
+                if col in sample:
+                    audio_col = col
+                    break
+            
+            # Try to find text column
+            for col in ["transcription", "text", "sentence", "transcript"]:
+                if col in sample and sample[col]:
+                    text_col = col
+                    break
+            
+            if audio_col and text_col:
+                samples.append({
+                    "audio": sample[audio_col],
+                    "text": sample[text_col],
+                    "id": f"summre_{i+1:02d}",
+                })
+            else:
+                print(f"   ⚠️  Sample {i} missing audio or text, skipping")
+        
+        print(f"   ✓ Extracted {len(samples)} valid samples")
+        return samples
+    
+    except Exception as e:
+        print(f"   ❌ Error loading SUMM-RE: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+def load_voxpopuli_fr_dataset(limit: Optional[int] = None) -> List[Dict]:
+    """
+    Load VoxPopuli French dataset from HuggingFace.
+    
+    Args:
+        limit: Maximum number of samples to load (None for all)
+    
+    Returns:
+        List of samples with audio and transcription
+    """
+    print("\n" + "=" * 60)
+    print("📥 Loading VoxPopuli FR dataset...")
+    print("=" * 60)
+    
+    try:
+        dataset = load_dataset("facebook/voxpopuli", "fr", split="train")
+        
+        if limit:
+            dataset = dataset.select(range(min(limit, len(dataset))))
+        
+        print(f"   ✓ Loaded {len(dataset)} samples")
+        print(f"   📋 Columns: {dataset.column_names}")
+        
+        samples = []
+        for i, sample in enumerate(dataset):
+            # VoxPopuli structure: "audio" and "normalized_text" or "raw_text"
+            audio_data = sample.get("audio")
+            text = sample.get("normalized_text") or sample.get("raw_text") or sample.get("text")
+            
+            if audio_data and text:
+                samples.append({
+                    "audio": audio_data,
+                    "text": text,
+                    "id": f"voxp_{i+1:02d}",
+                })
+            else:
+                print(f"   ⚠️  Sample {i} missing audio or text, skipping")
+        
+        print(f"   ✓ Extracted {len(samples)} valid samples")
+        return samples
+    
+    except Exception as e:
+        print(f"   ❌ Error loading VoxPopuli FR: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+def load_pastel_dataset(local_dir: Optional[Path] = None) -> List[Dict]:
+    """
+    Load PASTEL/COCo/Canal-U dataset.
+    
+    This function supports:
+    1. Loading from a local directory if provided
+    2. Placeholder for future automatic download
+    
+    Args:
+        local_dir: Optional path to local directory with PASTEL data
+    
+    Returns:
+        List of samples with audio and transcription
+    
+    Note:
+        PASTEL corpus may require manual download. See comments below for instructions.
+    """
+    print("\n" + "=" * 60)
+    print("📥 Loading PASTEL/COCo/Canal-U dataset...")
+    print("=" * 60)
+    
+    samples = []
+    
+    # Option 1: Load from local directory if provided
+    if local_dir and local_dir.exists():
+        print(f"   📁 Loading from local directory: {local_dir}")
+        
+        # Expected structure:
+        # local_dir/
+        #   audio/
+        #     file1.wav
+        #     file2.wav
+        #   transcripts/
+        #     file1.txt
+        #     file2.txt
+        
+        audio_dir = local_dir / "audio"
+        transcript_dir = local_dir / "transcripts"
+        
+        if audio_dir.exists() and transcript_dir.exists():
+            audio_files = sorted(audio_dir.glob("*.wav"))
+            
+            for i, audio_file in enumerate(audio_files):
+                transcript_file = transcript_dir / f"{audio_file.stem}.txt"
+                
+                if transcript_file.exists():
+                    # Load audio
+                    try:
+                        audio_data, sr = librosa.load(str(audio_file), sr=SAMPLING_RATE)
+                    except Exception as e:
+                        print(f"   ⚠️  Error loading {audio_file}: {e}")
+                        continue
+                    
+                    # Load transcript
+                    with open(transcript_file, "r", encoding="utf-8") as f:
+                        text = f.read().strip()
+                    
+                    if text:
+                        samples.append({
+                            "audio": {"array": audio_data, "sampling_rate": sr},
+                            "text": text,
+                            "id": f"pastel_{i+1:02d}",
+                        })
+            
+            print(f"   ✓ Loaded {len(samples)} samples from local directory")
+            return samples
+    
+    # Option 2: Placeholder for automatic download
+    print("   ⚠️  PASTEL/COCo/Canal-U automatic download not yet implemented")
+    print("   📝 To add PASTEL data manually:")
+    print("      1. Download PASTEL corpus from: https://pastel.huma-num.fr/")
+    print("      2. Extract audio files to: data/pastel/audio/")
+    print("      3. Extract transcripts to: data/pastel/transcripts/")
+    print("      4. Run this script with: --pastel-dir data/pastel")
+    print("   📝 Alternative: Use other educational datasets from HuggingFace")
+    print("      (e.g., common_voice with educational tags, or custom uploads)")
+    
+    return samples
+
+
+def process_samples(
+    samples: List[Dict],
+    source_name: str,
+    max_count: Optional[int] = None,
+) -> List[Dict]:
+    """
+    Process samples: save audio, normalize text, validate.
+    
+    Args:
+        samples: List of sample dictionaries
+        source_name: Name of the source dataset
+        max_count: Maximum number of samples to process
+    
+    Returns:
+        List of metadata dictionaries
+    """
+    if max_count:
+        samples = samples[:max_count]
+    
+    print(f"\n📊 Processing {len(samples)} samples from {source_name}...")
+    
+    metadata_list = []
+    
+    for sample in tqdm(samples, desc=f"  Processing {source_name}"):
+        sample_id = sample["id"]
+        audio_data = sample["audio"]
+        text = sample["text"]
+        
+        # Validate text
+        if not text or len(text.strip()) == 0:
+            print(f"   ⚠️  Skipping {sample_id}: empty text")
+            continue
+        
+        # Normalize text
+        normalized_text = normalize_text(text)
+        
+        if not normalized_text:
+            print(f"   ⚠️  Skipping {sample_id}: text became empty after normalization")
+            continue
+        
+        # Save audio file
+        audio_path = AUDIO_DIR / f"{sample_id}.wav"
+        try:
+            save_audio_file(audio_data, audio_path, SAMPLING_RATE)
+        except Exception as e:
+            print(f"   ⚠️  Error saving audio for {sample_id}: {e}")
+            continue
+        
+        # Validate audio duration
+        duration = get_audio_duration(audio_path)
+        if duration < MIN_DURATION:
+            print(f"   ⚠️  Skipping {sample_id}: duration too short ({duration:.1f}s)")
+            audio_path.unlink()  # Remove short file
+            continue
+        if duration > MAX_DURATION:
+            print(f"   ⚠️  Skipping {sample_id}: duration too long ({duration:.1f}s)")
+            audio_path.unlink()  # Remove long file
+            continue
+        
+        # Save reference text
+        ref_path = REFS_DIR / f"{sample_id}.txt"
+        with open(ref_path, "w", encoding="utf-8") as f:
+            f.write(normalized_text)
+        
+        # Create metadata entry
+        metadata = {
+            "id": sample_id,
+            "source": source_name,
+            "audio_path": str(audio_path.relative_to(BENCHMARK_DIR.parent.parent)),
+            "ref_path": str(ref_path.relative_to(BENCHMARK_DIR.parent.parent)),
+            "duration": round(duration, 2),
+            "sampling_rate": SAMPLING_RATE,
+        }
+        
+        metadata_list.append(metadata)
+    
+    print(f"   ✓ Successfully processed {len(metadata_list)} samples")
+    return metadata_list
+
+
+def validate_dataset(metadata_list: List[Dict]) -> Tuple[bool, List[str]]:
+    """
+    Validate the dataset.
+    
+    Args:
+        metadata_list: List of metadata dictionaries
+    
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+    
+    for metadata in metadata_list:
+        audio_path = Path(metadata["audio_path"])
+        ref_path = Path(metadata["ref_path"])
+        
+        # Check audio file exists
+        if not audio_path.exists():
+            errors.append(f"Missing audio: {audio_path}")
+        
+        # Check reference file exists
+        if not ref_path.exists():
+            errors.append(f"Missing reference: {ref_path}")
+        
+        # Check duration is reasonable
+        duration = metadata.get("duration", 0)
+        if duration < MIN_DURATION or duration > MAX_DURATION:
+            errors.append(f"Invalid duration for {metadata['id']}: {duration}s")
+    
+    return len(errors) == 0, errors
+
+
+def build_metadata_jsonl(metadata_list: List[Dict]):
+    """Write metadata to JSONL file."""
+    print(f"\n📝 Writing metadata to {METADATA_FILE}...")
+    
+    if jsonlines:
+        with jsonlines.open(str(METADATA_FILE), mode="w") as writer:
+            for metadata in metadata_list:
+                writer.write(metadata)
+    else:
+        # Fallback: write manually
+        with open(METADATA_FILE, "w", encoding="utf-8") as f:
+            for metadata in metadata_list:
+                f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
+    
+    print(f"   ✓ Wrote {len(metadata_list)} entries")
+
+
+def print_summary(metadata_list: List[Dict]):
+    """Print dataset summary statistics."""
+    print("\n" + "=" * 60)
+    print("📊 DATASET SUMMARY")
+    print("=" * 60)
+    
+    # Group by source
+    by_source = {}
+    for metadata in metadata_list:
+        source = metadata["source"]
+        if source not in by_source:
+            by_source[source] = []
+        by_source[source].append(metadata)
+    
+    total_duration = 0.0
+    
+    print(f"\n{'Source':<15} {'Files':<10} {'Duration (min)':<15}")
+    print("-" * 60)
+    
+    for source in sorted(by_source.keys()):
+        samples = by_source[source]
+        duration = sum(m["duration"] for m in samples)
+        total_duration += duration
+        print(f"{source:<15} {len(samples):<10} {duration/60:.2f}")
+    
+    print("-" * 60)
+    print(f"{'TOTAL':<15} {len(metadata_list):<10} {total_duration/60:.2f}")
+    print("=" * 60)
+    
+    print(f"\n✅ Dataset created successfully!")
+    print(f"   📁 Location: {BENCHMARK_DIR}")
+    print(f"   📊 Total files: {len(metadata_list)}")
+    print(f"   ⏱️  Total duration: {total_duration/60:.2f} minutes")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build education_v1 benchmark dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--pastel-dir",
+        type=Path,
+        help="Path to local PASTEL dataset directory",
+    )
+    parser.add_argument(
+        "--summre-limit",
+        type=int,
+        default=TARGET_COUNTS["summre"],
+        help=f"Maximum number of SUMM-RE samples (default: {TARGET_COUNTS['summre']})",
+    )
+    parser.add_argument(
+        "--voxpopuli-limit",
+        type=int,
+        default=TARGET_COUNTS["voxpopuli"],
+        help=f"Maximum number of VoxPopuli samples (default: {TARGET_COUNTS['voxpopuli']})",
+    )
+    parser.add_argument(
+        "--pastel-limit",
+        type=int,
+        default=TARGET_COUNTS["pastel"],
+        help=f"Maximum number of PASTEL samples (default: {TARGET_COUNTS['pastel']})",
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip dataset validation",
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("🎓 Building education_v1 Benchmark Dataset")
+    print("=" * 60)
+    
+    # Create directories
+    ensure_directories()
+    
+    # Load datasets
+    all_metadata = []
+    
+    # 1. SUMM-RE (40%)
+    summre_samples = load_summre_dataset(limit=args.summre_limit * 2)  # Load extra for filtering
+    if summre_samples:
+        summre_metadata = process_samples(summre_samples, "SUMM-RE", max_count=args.summre_limit)
+        all_metadata.extend(summre_metadata)
+    
+    # 2. VoxPopuli FR (20%)
+    voxpopuli_samples = load_voxpopuli_fr_dataset(limit=args.voxpopuli_limit * 2)
+    if voxpopuli_samples:
+        voxpopuli_metadata = process_samples(voxpopuli_samples, "VoxPopuli", max_count=args.voxpopuli_limit)
+        all_metadata.extend(voxpopuli_metadata)
+    
+    # 3. PASTEL/COCo/Canal-U (40%)
+    pastel_samples = load_pastel_dataset(local_dir=args.pastel_dir)
+    if pastel_samples:
+        pastel_metadata = process_samples(pastel_samples, "PASTEL", max_count=args.pastel_limit)
+        all_metadata.extend(pastel_metadata)
+    else:
+        print("\n⚠️  No PASTEL data loaded. Dataset will be incomplete.")
+        print("   To add PASTEL data, use --pastel-dir option or see instructions above.")
+    
+    # Validate dataset
+    if not args.skip_validation:
+        is_valid, errors = validate_dataset(all_metadata)
+        if not is_valid:
+            print("\n⚠️  Validation errors found:")
+            for error in errors:
+                print(f"   - {error}")
+        else:
+            print("\n✅ Dataset validation passed")
+    
+    # Build metadata.jsonl
+    if all_metadata:
+        build_metadata_jsonl(all_metadata)
+        print_summary(all_metadata)
+    else:
+        print("\n❌ No samples were processed. Check dataset loading above.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+

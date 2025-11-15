@@ -16,6 +16,7 @@ jiwer>=3.0.0  # For WER/CER metrics
 numpy>=1.24.0
 tqdm>=4.65.0
 pyyaml>=6.0.0  # For benchmark config files
+jsonlines>=3.0.0  # For JSONL metadata files
 
 # Optional: for tensorboard logging
 tensorboard>=2.14.0

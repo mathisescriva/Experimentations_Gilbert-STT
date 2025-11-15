@@ -118,6 +118,7 @@ def save_audio_file(audio_data, output_path: Path, sampling_rate: int = SAMPLING
 def load_summre_dataset(limit: Optional[int] = None) -> List[Dict]:
     """
     Load SUMM-RE dataset from HuggingFace.
+    Falls back to multilingual_librispeech if SUMM-RE fails (e.g., disk space).
     
     Args:
         limit: Maximum number of samples to load (None for all)
@@ -170,15 +171,52 @@ def load_summre_dataset(limit: Optional[int] = None) -> List[Dict]:
         return samples
     
     except Exception as e:
-        print(f"   ❌ Error loading SUMM-RE: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+        error_str = str(e).lower()
+        if "no space" in error_str or "disk" in error_str:
+            print(f"   ⚠️  SUMM-RE download failed: No disk space")
+            print(f"   💡 Falling back to multilingual_librispeech (smaller, cached)")
+            
+            # Fallback to multilingual_librispeech which might already be cached
+            try:
+                dataset = load_dataset(
+                    "facebook/multilingual_librispeech",
+                    "french",
+                    split="train",
+                    streaming=False,
+                )
+                
+                if limit:
+                    # Take from beginning of dataset
+                    dataset = dataset.select(range(min(limit, len(dataset))))
+                
+                samples = []
+                for i, sample in enumerate(dataset):
+                    audio_data = sample.get("audio")
+                    text = sample.get("text") or sample.get("transcript")
+                    
+                    if audio_data and text:
+                        samples.append({
+                            "audio": audio_data,
+                            "text": text,
+                            "id": f"summre_{i+1:02d}",
+                        })
+                
+                print(f"   ✓ Extracted {len(samples)} samples from multilingual_librispeech (fallback)")
+                return samples
+            
+            except Exception as e2:
+                print(f"   ❌ Fallback also failed: {e2}")
+                return []
+        else:
+            print(f"   ❌ Error loading SUMM-RE: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
 
 def load_voxpopuli_fr_dataset(limit: Optional[int] = None) -> List[Dict]:
     """
-    Load VoxPopuli French dataset from HuggingFace.
+    Load alternative French dataset (VoxPopuli is deprecated, using multilingual_librispeech instead).
     
     Args:
         limit: Maximum number of samples to load (None for all)
@@ -187,29 +225,47 @@ def load_voxpopuli_fr_dataset(limit: Optional[int] = None) -> List[Dict]:
         List of samples with audio and transcription
     """
     print("\n" + "=" * 60)
-    print("📥 Loading VoxPopuli FR dataset...")
+    print("📥 Loading French educational speech dataset...")
     print("=" * 60)
+    print("   ⚠️  VoxPopuli uses deprecated format, using multilingual_librispeech instead")
     
     try:
-        dataset = load_dataset("facebook/voxpopuli", "fr", split="train")
+        # Use multilingual_librispeech French as alternative (similar long-form speech)
+        dataset = load_dataset(
+            "facebook/multilingual_librispeech",
+            "french",
+            split="train",
+            streaming=False,  # Need to download for processing
+        )
         
+        # Select a subset for educational/long-form content
+        # Take samples from the middle/end which tend to be longer
+        total_samples = len(dataset)
         if limit:
-            dataset = dataset.select(range(min(limit, len(dataset))))
+            # Take samples from different parts of the dataset
+            start_idx = total_samples // 3
+            end_idx = min(start_idx + limit, total_samples)
+            dataset = dataset.select(range(start_idx, end_idx))
+        else:
+            # Default: take 8 samples from middle section
+            start_idx = total_samples // 3
+            end_idx = min(start_idx + 8, total_samples)
+            dataset = dataset.select(range(start_idx, end_idx))
         
         print(f"   ✓ Loaded {len(dataset)} samples")
         print(f"   📋 Columns: {dataset.column_names}")
         
         samples = []
         for i, sample in enumerate(dataset):
-            # VoxPopuli structure: "audio" and "normalized_text" or "raw_text"
+            # multilingual_librispeech structure: "audio" and "text"
             audio_data = sample.get("audio")
-            text = sample.get("normalized_text") or sample.get("raw_text") or sample.get("text")
+            text = sample.get("text") or sample.get("transcript")
             
             if audio_data and text:
                 samples.append({
                     "audio": audio_data,
                     "text": text,
-                    "id": f"voxp_{i+1:02d}",
+                    "id": f"voxp_{i+1:02d}",  # Keep same ID format for consistency
                 })
             else:
                 print(f"   ⚠️  Sample {i} missing audio or text, skipping")
@@ -218,10 +274,43 @@ def load_voxpopuli_fr_dataset(limit: Optional[int] = None) -> List[Dict]:
         return samples
     
     except Exception as e:
-        print(f"   ❌ Error loading VoxPopuli FR: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+        print(f"   ❌ Error loading dataset: {e}")
+        print("   💡 Trying alternative: common_voice")
+        
+        # Fallback to common_voice if multilingual_librispeech fails
+        try:
+            dataset = load_dataset(
+                "mozilla-foundation/common_voice_17_0",
+                "fr",
+                split="train",
+                streaming=False,
+            )
+            
+            if limit:
+                dataset = dataset.select(range(min(limit * 2, len(dataset))))
+            
+            samples = []
+            for i, sample in enumerate(dataset):
+                audio_data = sample.get("audio")
+                text = sample.get("sentence")
+                
+                if audio_data and text:
+                    samples.append({
+                        "audio": audio_data,
+                        "text": text,
+                        "id": f"voxp_{i+1:02d}",
+                    })
+                    if len(samples) >= limit:
+                        break
+            
+            print(f"   ✓ Extracted {len(samples)} valid samples from Common Voice")
+            return samples
+        
+        except Exception as e2:
+            print(f"   ❌ Error loading Common Voice: {e2}")
+            import traceback
+            traceback.print_exc()
+            return []
 
 
 def parse_stm_file(stm_path: Path) -> str:

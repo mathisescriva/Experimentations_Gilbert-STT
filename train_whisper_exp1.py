@@ -44,7 +44,8 @@ def train_whisper():
     """Fonction d'entraînement - Expérience 1"""
     import os
     import torch
-    from datasets import load_dataset, Audio
+    import time
+    from datasets import load_dataset, Audio, DownloadConfig
     from transformers import (
         WhisperProcessor,
         WhisperFeatureExtractor,  # Ajouté pour charger séparément
@@ -122,64 +123,85 @@ def train_whisper():
         print("📚 Dataset: Multilingual LibriSpeech (French)")
         print("=" * 60)
         
+        # Activer hf_transfer pour accélérer les téléchargements
+        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+        
         print(f"\n📦 Loading {DATASET_NAME} (config: {DATASET_CONFIG})...")
         
-        try:
-            # Charger le dataset
-            dataset = load_dataset(
-                DATASET_NAME,
-                DATASET_CONFIG,
-                split="train",
-            )
-            
-            print(f"   ✓ Loaded: {len(dataset)} samples")
-            print(f"   📋 Columns: {dataset.column_names}")
-            
-            # Vérifier les colonnes
-            if AUDIO_COLUMN not in dataset.column_names:
-                raise ValueError(f"Audio column '{AUDIO_COLUMN}' not found in dataset")
-            if TEXT_COLUMN not in dataset.column_names:
-                raise ValueError(f"Text column '{TEXT_COLUMN}' not found in dataset")
-            
-            # Caster l'audio en 16kHz mono
-            print(f"\n🎵 Casting audio to {SAMPLING_RATE}Hz mono...")
-            dataset = dataset.cast_column(
-                AUDIO_COLUMN,
-                Audio(sampling_rate=SAMPLING_RATE)
-            )
-            
-            # Sélectionner et renommer les colonnes
-            dataset = dataset.select_columns([AUDIO_COLUMN, TEXT_COLUMN])
-            dataset = dataset.rename_columns({
-                AUDIO_COLUMN: "audio",
-                TEXT_COLUMN: "text"
-            })
-            
-            # Filtrer les textes vides
-            dataset = dataset.filter(
-                lambda x: x["text"] is not None and len(str(x["text"]).strip()) > 0
-            )
-            
-            print(f"   ✓ Final dataset size: {len(dataset)} samples")
-            
-            # Shuffle et split
-            dataset = dataset.shuffle(seed=42)
-            split_dataset = dataset.train_test_split(
-                test_size=1 - TRAIN_TEST_SPLIT,
-                seed=42
-            )
-            
-            print(f"\n📊 Train/Test split:")
-            print(f"   ✓ Train: {len(split_dataset['train'])} samples")
-            print(f"   ✓ Test: {len(split_dataset['test'])} samples")
-            
-            return split_dataset
-            
-        except Exception as e:
-            print(f"   ❌ Error loading dataset: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        # Retry logic avec backoff exponentiel
+        max_retries = 5
+        retry_delay = 10  # secondes
+        
+        for attempt in range(max_retries):
+            try:
+                # Charger le dataset avec timeout augmenté
+                import datasets.config
+                datasets.config.HF_DATASETS_OFFLINE = False
+                
+                dataset = load_dataset(
+                    DATASET_NAME,
+                    DATASET_CONFIG,
+                    split="train",
+                    download_config=DownloadConfig(
+                        num_proc=4,  # Paralléliser le téléchargement
+                        max_retries=3,
+                    ),
+                )
+                
+                print(f"   ✓ Loaded: {len(dataset)} samples")
+                print(f"   📋 Columns: {dataset.column_names}")
+                
+                # Vérifier les colonnes
+                if AUDIO_COLUMN not in dataset.column_names:
+                    raise ValueError(f"Audio column '{AUDIO_COLUMN}' not found in dataset")
+                if TEXT_COLUMN not in dataset.column_names:
+                    raise ValueError(f"Text column '{TEXT_COLUMN}' not found in dataset")
+                
+                # Caster l'audio en 16kHz mono
+                print(f"\n🎵 Casting audio to {SAMPLING_RATE}Hz mono...")
+                dataset = dataset.cast_column(
+                    AUDIO_COLUMN,
+                    Audio(sampling_rate=SAMPLING_RATE)
+                )
+                
+                # Sélectionner et renommer les colonnes
+                dataset = dataset.select_columns([AUDIO_COLUMN, TEXT_COLUMN])
+                dataset = dataset.rename_columns({
+                    AUDIO_COLUMN: "audio",
+                    TEXT_COLUMN: "text"
+                })
+                
+                # Filtrer les textes vides
+                dataset = dataset.filter(
+                    lambda x: x["text"] is not None and len(str(x["text"]).strip()) > 0
+                )
+                
+                print(f"   ✓ Final dataset size: {len(dataset)} samples")
+                
+                # Shuffle et split
+                dataset = dataset.shuffle(seed=42)
+                split_dataset = dataset.train_test_split(
+                    test_size=1 - TRAIN_TEST_SPLIT,
+                    seed=42
+                )
+                
+                print(f"\n📊 Train/Test split:")
+                print(f"   ✓ Train: {len(split_dataset['train'])} samples")
+                print(f"   ✓ Test: {len(split_dataset['test'])} samples")
+                
+                return split_dataset
+                
+            except (ConnectionError, TimeoutError, Exception) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Backoff exponentiel
+                    print(f"   ⚠️  Error loading dataset (attempt {attempt + 1}/{max_retries}): {e}")
+                    print(f"   🔄 Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"   ❌ Error loading dataset after {max_retries} attempts: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
 
     def prepare_dataset(batch, feature_extractor, tokenizer, model_input_name):
         """Prépare un batch d'exemples pour l'entraînement (BATCHED VERSION)"""

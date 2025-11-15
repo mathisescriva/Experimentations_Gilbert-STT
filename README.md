@@ -243,6 +243,38 @@ Les datasets sont téléchargés automatiquement au premier lancement. Vérifiez
 
 Ce projet inclut un système de benchmark interne pour évaluer les performances ASR sur différents types de contenu.
 
+### 🎯 Préparer les Références (Sans Transcription Manuelle)
+
+Vous avez plusieurs options pour obtenir les transcriptions de référence :
+
+1. **Depuis des Datasets HuggingFace** (Recommandé) :
+   ```bash
+   python -m src.evaluation.prepare_references dataset \
+     --dataset "facebook/multilingual_librispeech" \
+     --config "french" \
+     --subset "meetings" \
+     --limit 50
+   ```
+
+2. **Depuis des fichiers de sous-titres** (.srt, .vtt) :
+   ```bash
+   pip install pysrt webvtt  # Dépendances optionnelles
+   python -m src.evaluation.prepare_references subtitles \
+     --subtitle-dir /path/to/subtitles \
+     --audio-dir benchmark/meetings/audio \
+     --output-refs-dir benchmark/meetings/refs
+   ```
+
+3. **Utiliser un modèle de référence** (pseudo-références - à vérifier manuellement) :
+   ```bash
+   python -m src.evaluation.prepare_references model \
+     --audio-dir benchmark/meetings/audio \
+     --output-refs-dir benchmark/meetings/refs \
+     --model-name "openai/whisper-large-v3"
+   ```
+
+Voir `src/evaluation/PREPARE_REFERENCES.md` pour plus de détails.
+
 ### Structure du benchmark
 
 Le benchmark est organisé en sous-ensembles dans le dossier `benchmark/` :

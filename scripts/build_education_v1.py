@@ -224,82 +224,265 @@ def load_voxpopuli_fr_dataset(limit: Optional[int] = None) -> List[Dict]:
         return []
 
 
-def load_pastel_dataset(local_dir: Optional[Path] = None) -> List[Dict]:
+def parse_stm_file(stm_path: Path) -> str:
+    """
+    Parse NIST STM (Standard Time Marked) format transcription file.
+    
+    STM format: <filename> <channel> <speaker> <start_time> <end_time> <text>
+    
+    Args:
+        stm_path: Path to .stm file
+    
+    Returns:
+        Concatenated transcription text
+    """
+    transcript_parts = []
+    
+    try:
+        with open(stm_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(";;"):
+                    continue
+                
+                # Parse STM line: filename channel speaker start end text
+                parts = line.split(None, 5)
+                if len(parts) >= 6:
+                    text = parts[5]
+                    transcript_parts.append(text)
+    
+    except Exception as e:
+        print(f"   ⚠️  Error parsing STM file {stm_path}: {e}")
+        return ""
+    
+    return " ".join(transcript_parts)
+
+
+def parse_trs_file(trs_path: Path) -> str:
+    """
+    Parse Transcriber TRS format transcription file (XML-based).
+    
+    Args:
+        trs_path: Path to .trs file
+    
+    Returns:
+        Concatenated transcription text
+    """
+    try:
+        import xml.etree.ElementTree as ET
+        
+        tree = ET.parse(trs_path)
+        root = tree.getroot()
+        
+        # Extract all text from Sync and Turn elements
+        transcript_parts = []
+        
+        # Find all text content in the TRS file
+        for elem in root.iter():
+            if elem.text and elem.text.strip():
+                text = elem.text.strip()
+                # Skip timestamps and metadata
+                if not text.startswith("<") and len(text) > 1:
+                    transcript_parts.append(text)
+        
+        return " ".join(transcript_parts)
+    
+    except Exception as e:
+        print(f"   ⚠️  Error parsing TRS file {trs_path}: {e}")
+        return ""
+
+
+def load_pastel_dataset(
+    local_dir: Optional[Path] = None,
+    github_repo: str = "nicolashernandez/anr-pastel-data",
+) -> List[Dict]:
     """
     Load PASTEL/COCo/Canal-U dataset.
     
     This function supports:
-    1. Loading from a local directory if provided
-    2. Placeholder for future automatic download
+    1. Loading from a local directory (cloned from GitHub)
+    2. Automatic download from GitHub (if git is available)
     
     Args:
         local_dir: Optional path to local directory with PASTEL data
+                   If None, tries to clone from GitHub to data/pastel/
+        github_repo: GitHub repository (default: nicolashernandez/anr-pastel-data)
     
     Returns:
         List of samples with audio and transcription
     
     Note:
-        PASTEL corpus may require manual download. See comments below for instructions.
+        PASTEL corpus structure (from GitHub):
+        - data/ : all courses
+        - Each course has:
+          - trs_manu/ : manual transcriptions (.trs and .stm formats)
+          - gst/ : formatted transcriptions
+        - Audio files may need to be extracted from video sources
+    
+    References:
+        GitHub: https://github.com/nicolashernandez/anr-pastel-data
+        Project: https://anr.fr/Projet-ANR-16-CE33-0007
     """
     print("\n" + "=" * 60)
     print("📥 Loading PASTEL/COCo/Canal-U dataset...")
     print("=" * 60)
     
     samples = []
+    pastel_data_dir = None
     
-    # Option 1: Load from local directory if provided
+    # Option 1: Use provided local directory
     if local_dir and local_dir.exists():
-        print(f"   📁 Loading from local directory: {local_dir}")
-        
-        # Expected structure:
-        # local_dir/
-        #   audio/
-        #     file1.wav
-        #     file2.wav
-        #   transcripts/
-        #     file1.txt
-        #     file2.txt
-        
-        audio_dir = local_dir / "audio"
-        transcript_dir = local_dir / "transcripts"
-        
-        if audio_dir.exists() and transcript_dir.exists():
-            audio_files = sorted(audio_dir.glob("*.wav"))
-            
-            for i, audio_file in enumerate(audio_files):
-                transcript_file = transcript_dir / f"{audio_file.stem}.txt"
-                
-                if transcript_file.exists():
-                    # Load audio
-                    try:
-                        audio_data, sr = librosa.load(str(audio_file), sr=SAMPLING_RATE)
-                    except Exception as e:
-                        print(f"   ⚠️  Error loading {audio_file}: {e}")
-                        continue
-                    
-                    # Load transcript
-                    with open(transcript_file, "r", encoding="utf-8") as f:
-                        text = f.read().strip()
-                    
-                    if text:
-                        samples.append({
-                            "audio": {"array": audio_data, "sampling_rate": sr},
-                            "text": text,
-                            "id": f"pastel_{i+1:02d}",
-                        })
-            
-            print(f"   ✓ Loaded {len(samples)} samples from local directory")
-            return samples
+        pastel_data_dir = local_dir
+        print(f"   📁 Using provided directory: {local_dir}")
     
-    # Option 2: Placeholder for automatic download
-    print("   ⚠️  PASTEL/COCo/Canal-U automatic download not yet implemented")
-    print("   📝 To add PASTEL data manually:")
-    print("      1. Download PASTEL corpus from: https://pastel.huma-num.fr/")
-    print("      2. Extract audio files to: data/pastel/audio/")
-    print("      3. Extract transcripts to: data/pastel/transcripts/")
-    print("      4. Run this script with: --pastel-dir data/pastel")
-    print("   📝 Alternative: Use other educational datasets from HuggingFace")
-    print("      (e.g., common_voice with educational tags, or custom uploads)")
+    # Option 2: Try to find in data/pastel/
+    elif not local_dir:
+        default_dir = Path(__file__).parent.parent / "data" / "pastel"
+        if default_dir.exists():
+            pastel_data_dir = default_dir
+            print(f"   📁 Found PASTEL data in: {default_dir}")
+    
+    # Option 3: Try to clone from GitHub
+    if not pastel_data_dir:
+        print(f"   📥 Attempting to clone PASTEL corpus from GitHub...")
+        print(f"      Repository: {github_repo}")
+        
+        clone_dir = Path(__file__).parent.parent / "data" / "pastel"
+        clone_dir.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            import subprocess
+            import shutil
+            
+            # Check if git is available
+            if not shutil.which("git"):
+                print("   ⚠️  git not found. Cannot clone automatically.")
+                print("   📝 Please clone manually:")
+                print(f"      git clone https://github.com/{github_repo}.git {clone_dir}")
+                return []
+            
+            # Clone if directory doesn't exist
+            if not clone_dir.exists():
+                print(f"   🔄 Cloning to {clone_dir}...")
+                result = subprocess.run(
+                    ["git", "clone", f"https://github.com/{github_repo}.git", str(clone_dir)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(f"   ❌ Clone failed: {result.stderr}")
+                    return []
+                print("   ✓ Clone successful")
+            else:
+                print(f"   ✓ Repository already exists at {clone_dir}")
+            
+            pastel_data_dir = clone_dir
+        
+        except Exception as e:
+            print(f"   ⚠️  Error cloning repository: {e}")
+            print("   📝 Please clone manually:")
+            print(f"      git clone https://github.com/{github_repo}.git {clone_dir}")
+            return []
+    
+    # Process PASTEL data structure
+    data_dir = pastel_data_dir / "data"
+    
+    if not data_dir.exists():
+        print(f"   ⚠️  PASTEL data directory not found: {data_dir}")
+        print("   📝 Expected structure: data/pastel/data/<course_name>/trs_manu/")
+        return []
+    
+    print(f"   📂 Processing courses from: {data_dir}")
+    
+    # Iterate through course directories
+    course_dirs = [d for d in data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    
+    if not course_dirs:
+        print("   ⚠️  No course directories found")
+        return []
+    
+    print(f"   📚 Found {len(course_dirs)} course directories")
+    
+    sample_count = 0
+    
+    for course_dir in course_dirs:
+        if course_dir.name == "cours_incomplets":
+            continue  # Skip incomplete courses
+        
+        trs_manu_dir = course_dir / "trs_manu"
+        
+        if not trs_manu_dir.exists():
+            continue
+        
+        # Look for .stm files (preferred) or .trs files
+        stm_files = list(trs_manu_dir.glob("*.stm"))
+        trs_files = list(trs_manu_dir.glob("*.trs"))
+        
+        # Prefer STM files, fallback to TRS
+        transcript_files = stm_files if stm_files else trs_files
+        
+        for transcript_file in transcript_files:
+            # Parse transcription
+            if transcript_file.suffix == ".stm":
+                text = parse_stm_file(transcript_file)
+            else:
+                text = parse_trs_file(transcript_file)
+            
+            if not text or len(text.strip()) < 10:
+                continue
+            
+            # Note: PASTEL corpus contains transcriptions but audio may need to be
+            # extracted from video sources (COCo, Canal-U). For now, we create
+            # entries with transcriptions only, and note that audio needs to be added.
+            
+            # Try to find corresponding audio file
+            # Audio might be in a separate location or need extraction from video
+            audio_path = None
+            
+            # Check common locations
+            possible_audio_dirs = [
+                course_dir / "audio",
+                course_dir.parent / "audio" / course_dir.name,
+                pastel_data_dir / "audio" / course_dir.name,
+            ]
+            
+            audio_file = None
+            for audio_dir in possible_audio_dirs:
+                if audio_dir.exists():
+                    # Try to find audio with same base name
+                    for ext in [".wav", ".mp3", ".flac"]:
+                        candidate = audio_dir / f"{transcript_file.stem}{ext}"
+                        if candidate.exists():
+                            audio_file = candidate
+                            break
+                    if audio_file:
+                        break
+            
+            if audio_file:
+                # Load audio
+                try:
+                    audio_data, sr = librosa.load(str(audio_file), sr=SAMPLING_RATE)
+                    samples.append({
+                        "audio": {"array": audio_data, "sampling_rate": sr},
+                        "text": text,
+                        "id": f"pastel_{sample_count+1:02d}",
+                    })
+                    sample_count += 1
+                except Exception as e:
+                    print(f"   ⚠️  Error loading audio {audio_file}: {e}")
+            else:
+                # Store transcription-only entry (audio can be added later)
+                # For now, we'll skip these as we need audio for the benchmark
+                print(f"   ⚠️  No audio found for {transcript_file.name}, skipping")
+                continue
+    
+    print(f"   ✓ Loaded {len(samples)} samples from PASTEL corpus")
+    
+    if len(samples) == 0:
+        print("\n   📝 Note: PASTEL corpus contains transcriptions but audio files")
+        print("      may need to be extracted from video sources.")
+        print("      See: https://github.com/nicolashernandez/anr-pastel-data")
+        print("      Video sources: COCo (http://www.comin-ocw.org) and Canal-U")
     
     return samples
 
@@ -476,7 +659,12 @@ def main():
     parser.add_argument(
         "--pastel-dir",
         type=Path,
-        help="Path to local PASTEL dataset directory",
+        help="Path to local PASTEL dataset directory (cloned from GitHub)",
+    )
+    parser.add_argument(
+        "--no-pastel-clone",
+        action="store_true",
+        help="Skip automatic cloning of PASTEL corpus from GitHub",
     )
     parser.add_argument(
         "--summre-limit",
@@ -527,13 +715,20 @@ def main():
         all_metadata.extend(voxpopuli_metadata)
     
     # 3. PASTEL/COCo/Canal-U (40%)
-    pastel_samples = load_pastel_dataset(local_dir=args.pastel_dir)
-    if pastel_samples:
-        pastel_metadata = process_samples(pastel_samples, "PASTEL", max_count=args.pastel_limit)
-        all_metadata.extend(pastel_metadata)
+    if not args.no_pastel_clone:
+        pastel_samples = load_pastel_dataset(local_dir=args.pastel_dir)
+        if pastel_samples:
+            pastel_metadata = process_samples(pastel_samples, "PASTEL", max_count=args.pastel_limit)
+            all_metadata.extend(pastel_metadata)
+        else:
+            print("\n⚠️  No PASTEL data loaded. Dataset will be incomplete.")
+            print("   PASTEL corpus: https://github.com/nicolashernandez/anr-pastel-data")
+            print("   To add PASTEL data:")
+            print("     1. Clone: git clone https://github.com/nicolashernandez/anr-pastel-data.git data/pastel")
+            print("     2. Or use: --pastel-dir /path/to/pastel")
+            print("   Note: Audio files may need extraction from video sources (COCo, Canal-U)")
     else:
-        print("\n⚠️  No PASTEL data loaded. Dataset will be incomplete.")
-        print("   To add PASTEL data, use --pastel-dir option or see instructions above.")
+        print("\n⏭️  Skipping PASTEL dataset (--no-pastel-clone specified)")
     
     # Validate dataset
     if not args.skip_validation:

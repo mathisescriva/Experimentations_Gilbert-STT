@@ -55,9 +55,11 @@ The script creates:
    - Default: 8 files
 
 3. **PASTEL/COCo/Canal-U** (40%): Course lectures
-   - Source: Local files or manual download
+   - Source: GitHub repository (https://github.com/nicolashernandez/anr-pastel-data)
    - Default: 15 files
-   - See script comments for manual setup instructions
+   - The script can automatically clone the repository
+   - Note: Audio files may need extraction from video sources (COCo, Canal-U)
+   - Manual setup: `git clone https://github.com/nicolashernandez/anr-pastel-data.git data/pastel`
 
 ### Notes
 

@@ -1,0 +1,26 @@
+# Benchmark configuration for ASR evaluation
+
+# Hugging Face model identifier
+# Examples:
+#   - "openai/whisper-large-v3"
+#   - "MEscriva/gilbert-fr-source"
+#   - "./models/gilbert-whisper-l3-fr-base-v1"  # Local path
+model_name: "openai/whisper-large-v3"
+
+# Device to use for inference
+# Options: "cuda" (GPU) or "cpu"
+device: "cuda"
+
+# List of subsets to evaluate
+# Each subset should have:
+#   - benchmark/{subset}/audio/  (audio files)
+#   - benchmark/{subset}/refs/   (reference text files)
+subsets:
+  - "meetings"
+  - "telephone"
+  - "accents"
+  - "longform"
+
+# Base directory for benchmark data
+benchmark_dir: "benchmark"
+

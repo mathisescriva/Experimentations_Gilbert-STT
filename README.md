@@ -239,18 +239,90 @@ dataset = load_dataset(..., streaming=True)
 
 Les datasets sont téléchargés automatiquement au premier lancement. Vérifiez votre connexion internet et l'espace disque disponible.
 
+## 📊 Benchmark
+
+Ce projet inclut un système de benchmark interne pour évaluer les performances ASR sur différents types de contenu.
+
+### Structure du benchmark
+
+Le benchmark est organisé en sous-ensembles dans le dossier `benchmark/` :
+
+```
+benchmark/
+├── meetings/
+│   ├── audio/     # Fichiers audio de réunions
+│   └── refs/      # Textes de référence (.txt)
+├── telephone/
+│   ├── audio/     # Fichiers audio téléphoniques
+│   └── refs/
+├── accents/
+│   ├── audio/      # Fichiers avec accents régionaux
+│   └── refs/
+└── longform/
+    ├── audio/      # Contenu long format
+    └── refs/
+```
+
+Chaque fichier audio doit avoir un fichier de référence correspondant dans `refs/` avec le même nom (ex: `audio/sample.wav` → `refs/sample.txt`).
+
+### Utilisation
+
+1. **Préparer les données** : Placez vos fichiers audio et leurs références dans les dossiers appropriés.
+
+2. **Configurer le benchmark** : Éditez `configs/benchmark.yaml` :
+   ```yaml
+   model_name: "MEscriva/gilbert-fr-source"  # Votre modèle
+   device: "cuda"  # ou "cpu"
+   subsets: ["meetings", "telephone", "accents", "longform"]
+   ```
+
+3. **Lancer le benchmark** :
+   ```bash
+   python -m src.evaluation.run_benchmark --config configs/benchmark.yaml
+   ```
+
+   Ou avec des options personnalisées :
+   ```bash
+   python -m src.evaluation.run_benchmark \
+     --config configs/benchmark.yaml \
+     --model-name "MEscriva/gilbert-fr-source" \
+     --compute-cer \
+     --output-csv results.csv
+   ```
+
+### Métriques
+
+Le benchmark calcule actuellement :
+- **WER (Word Error Rate)** : Taux d'erreur au niveau des mots
+- **CER (Character Error Rate)** : Taux d'erreur au niveau des caractères (optionnel avec `--compute-cer`)
+
+Les résultats sont affichés dans un tableau récapitulatif par sous-ensemble et une moyenne globale.
+
 ## 📝 Structure du projet
 
 ```
 .
-├── train_whisper_fr.py      # Script principal d'entraînement
-├── inference_example.py      # Script d'exemple pour l'inférence
-├── requirements.txt          # Dépendances Python
-├── README.md                 # Ce fichier
-├── .gitignore                # Fichiers à ignorer par Git
-├── data/                     # (optionnel) Données locales
-└── models/                   # (optionnel) Checkpoints
-    └── gilbert-whisper-large-v3-fr-v1/  # Modèle finetuné
+├── train_whisper_exp1.py      # Script principal d'entraînement (Modal)
+├── evaluate_exp1.py            # Script d'évaluation après entraînement
+├── inference_example.py        # Script d'exemple pour l'inférence
+├── requirements.txt            # Dépendances Python
+├── README.md                   # Ce fichier
+├── .gitignore                  # Fichiers à ignorer par Git
+├── configs/
+│   └── benchmark.yaml         # Configuration du benchmark
+├── src/
+│   └── evaluation/
+│       ├── run_benchmark.py    # Script CLI pour le benchmark
+│       ├── asr_inference.py    # Wrapper pour l'inférence ASR
+│       └── metrics.py           # Calcul des métriques (WER, CER)
+├── benchmark/                  # Données de benchmark
+│   ├── meetings/
+│   ├── telephone/
+│   ├── accents/
+│   └── longform/
+├── data/                       # (optionnel) Données locales
+└── models/                     # (optionnel) Checkpoints
+    └── gilbert-whisper-l3-fr-base-v1/  # Modèle finetuné
 ```
 
 ## 🔮 Prochaines étapes

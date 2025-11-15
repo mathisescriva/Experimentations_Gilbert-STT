@@ -1,0 +1,86 @@
+Tu es un assistant IA qui aide à fine-tuner Whisper Large V3 pour améliorer les performances en français.
+
+CONTEXTE COMPLET :
+- Lire le fichier CONTEXTE_AGENT.md pour tous les détails
+- Projet : Fine-tuning progressif de Whisper Large V3 pour le français
+- Objectif final : Créer un pipeline d'expériences (Exp 1 → Exp 2 → Exp 3 → Exp 4)
+
+ÉTAT ACTUEL (Nov 15, 18:30) :
+- Expérience 1 EN COURS : Fine-tuning sur facebook/multilingual_librispeech (french)
+- GPU ACTUELLEMENT UTILISÉ : H100 (H200 bloque à cause du kernel version 4.4.0)
+- Évaluation baseline en cours sur H100 (fonctionne, progression visible)
+- Script : train_whisper_exp1.py (Modal, GPU H100)
+- Commande : modal run --detach train_whisper_exp1.py
+- Objectif : Créer gilbert-whisper-l3-fr-base-v1
+
+FICHIERS IMPORTANTS :
+- train_whisper_exp1.py : Script d'entraînement principal (CORRIGÉ selon exemple officiel Modal)
+- evaluate_exp1.py : Script d'évaluation après entraînement
+- CONTEXTE_AGENT.md : Documentation complète du contexte
+- PROCHAINES_ETAPES_EXP1.md : Guide des prochaines étapes
+- modal-examples/06_gpu_and_ml/openai_whisper/fine_tune_asr.py : Exemple officiel Modal (référence)
+
+PROBLÈMES RÉSOLUS :
+- Timeouts multiprocessing → Solution : batched=True dans .map()
+- jiwer manquant → Solution : Ajouté dans dépendances
+- Déconnexion client → Solution : --detach flag
+- prepare_dataset → Version batchée (comme exemple officiel Modal)
+- evaluation_strategy déprécié → Solution : eval_strategy (avec fallback)
+- tokenizer déprécié dans Seq2SeqTrainer → Solution : processing_class=feature_extractor
+- DataCollator incorrect → Solution : Ajout decoder_start_token_id et retrait start token
+- Blocage après trainer.train() → Solution : Évaluation baseline AVANT entraînement
+
+PROBLÈME CRITIQUE DÉCOUVERT :
+- H200 BLOQUE : Kernel version 4.4.0 < 5.5.0 recommandé → Cause des hangs
+  → SOLUTION : Utiliser H100 qui fonctionne (kernel plus récent)
+  → H200 démarre l'évaluation baseline mais bloque ensuite
+  → H100 fonctionne : évaluation baseline progresse (2/807, 4/807 itérations visibles)
+
+CORRECTIONS IMPORTANTES APPLIQUÉES (basées sur l'exemple officiel Modal) :
+1. Chargement séparé : feature_extractor et tokenizer chargés séparément, puis processor créé après
+2. Preprocessing : Utilise feature_extractor et tokenizer séparément (pas processor)
+3. processing_class : Utilise feature_extractor directement (pas processor.feature_extractor)
+4. compute_metrics : Utilise tokenizer directement (pas processor.tokenizer)
+5. DataCollator : Ajout decoder_start_token_id et retrait du start token des labels
+6. Évaluation baseline : AVANT l'entraînement (initialise le trainer)
+7. fp16=True : Comme l'exemple officiel (au lieu de bf16)
+8. group_by_length=True : Réactivé (comme l'exemple officiel)
+
+CONFIGURATION ACTUELLE :
+- GPU : H100 (H200 bloque, ne pas utiliser pour l'instant)
+- Batch size : 16 (H100) / 24 (H200 si ça fonctionne)
+- FP16 : True (comme l'exemple officiel)
+- Dataset : facebook/multilingual_librispeech (french)
+- Output : /output/gilbert-whisper-l3-fr-base-v1
+- Preprocessing sauvegardé : /preprocessed_data (Volume Modal)
+
+DIFFÉRENCES AVEC L'EXEMPLE OFFICIEL (acceptables) :
+- generation_max_length : 225 (nous) vs 40 (exemple) → Normal, nos transcriptions sont plus longues
+- eval_strategy : "steps" avec eval_steps=5000 (nous) vs "epoch" (exemple) → Choix intentionnel
+- load_best_model_at_end : True (nous) vs absent (exemple) → Option supplémentaire, OK
+- Ordre : train_test_split puis preprocessing (nous) vs preprocessing puis split (exemple) → OK
+
+IMPORTANT - RÈGLES CRITIQUES :
+1. TOUJOURS utiliser batched=True dans .map() pour éviter timeouts
+2. TOUJOURS utiliser --detach pour continuer même si client se déconnecte
+3. TOUJOURS charger feature_extractor et tokenizer séparément, puis créer processor après
+4. TOUJOURS utiliser processing_class=feature_extractor (pas processor.feature_extractor)
+5. TOUJOURS faire évaluation baseline AVANT trainer.train() pour initialiser le trainer
+6. Le preprocessing est sauvegardé dans /preprocessed_data (Volume Modal)
+7. Chaque expérience fine-tune le modèle précédent, pas l'original
+8. H200 BLOQUE - Utiliser H100 pour l'instant (kernel version problème)
+
+PROCHAINES ÉTAPES :
+1. Attendre fin évaluation baseline (~38-60 min sur H100, 807 itérations)
+2. Vérifier que l'entraînement démarre après baseline ("Training step 1/...")
+3. Attendre fin entraînement (~5h sur H100, ~3.3h sur H200 si ça fonctionne)
+4. Après entraînement : Télécharger modèle depuis Modal Volume
+5. Lancer evaluate_exp1.py pour comparer avec baseline
+6. Vérifier objectifs (WER amélioré, multilingue préservé)
+
+RÉFÉRENCE OFFICIELLE :
+- Exemple Modal : modal-examples/06_gpu_and_ml/openai_whisper/fine_tune_asr.py
+- URL GitHub : https://github.com/modal-labs/modal-examples
+- Tester avec : modal run 06_gpu_and_ml/openai_whisper/fine_tune_asr.py --test
+
+Lis CONTEXTE_AGENT.md pour tous les détails techniques et l'historique complet.

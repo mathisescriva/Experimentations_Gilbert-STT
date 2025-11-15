@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Models and checkpoints
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+checkpoint-*/
+gilbert-whisper-large-v3-fr-v1/
+
+# Datasets
+data/
+*.arrow
+*.parquet
+.cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# TensorBoard
+runs/
+*.tfevents.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# HuggingFace cache
+.huggingface/
+
+# Modal examples (external repos)
+modal-examples/
+modal-examples-temp/

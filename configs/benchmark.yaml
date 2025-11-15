@@ -20,6 +20,7 @@ subsets:
   - "telephone"
   - "accents"
   - "longform"
+  - "education"  # Dataset education_v1 (requires build_education_v1.py first)
 
 # Base directory for benchmark data
 benchmark_dir: "benchmark"
